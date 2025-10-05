@@ -963,8 +963,8 @@ class ReportGenerator:
                 if period_data['summary']:
                     periods_data.append({
                         'Period': period_name.title(),
-                        'Added': period_data['summary'].get('roles_added', 0),
-                        'Removed': period_data['summary'].get('roles_removed', 0)
+                        'Added': (period_data['summary'].get('roles_added', 0) or 0),
+                        'Removed': (period_data['summary'].get('roles_removed', 0) or 0)
                     })
             
             if periods_data:
@@ -1015,8 +1015,10 @@ class ReportGenerator:
             ax4 = fig.add_subplot(gs[1, 1])
             if 'weekly' in report['periods'] and report['periods']['weekly']['user_activity']:
                 user_activity = report['periods']['weekly']['user_activity']
-                activity_counts = [data['roles_added'] + data['roles_removed'] 
-                                 for data in user_activity.values()]
+                activity_counts = [
+                    (data.get('roles_added', 0) or 0) + (data.get('roles_removed', 0) or 0) 
+                    for data in user_activity.values()
+                ]
                 
                 if activity_counts and max(activity_counts) > 0:
                     ax4.hist(activity_counts, bins=min(10, len(set(activity_counts))), 
@@ -1039,8 +1041,8 @@ class ReportGenerator:
                 for source, counts in period_data.get('source_breakdown', {}).items():
                     if source not in all_sources:
                         all_sources[source] = {'added': 0, 'removed': 0}
-                    all_sources[source]['added'] += counts['added']
-                    all_sources[source]['removed'] += counts['removed']
+                    all_sources[source]['added'] += (counts.get('added', 0) or 0)
+                    all_sources[source]['removed'] += (counts.get('removed', 0) or 0)
             
             if all_sources:
                 sources = list(all_sources.keys())

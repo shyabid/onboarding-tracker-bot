@@ -264,8 +264,8 @@ class Database:
             async with db.execute(f'''
                 SELECT 
                     COUNT(*) as total_events,
-                    SUM(CASE WHEN event_type = 'added' THEN 1 ELSE 0 END) as roles_added,
-                    SUM(CASE WHEN event_type = 'removed' THEN 1 ELSE 0 END) as roles_removed,
+                    COALESCE(SUM(CASE WHEN event_type = 'added' THEN 1 ELSE 0 END), 0) as roles_added,
+                    COALESCE(SUM(CASE WHEN event_type = 'removed' THEN 1 ELSE 0 END), 0) as roles_removed,
                     COUNT(DISTINCT user_id) as unique_users,
                     COUNT(DISTINCT role_id) as roles_affected
                 FROM role_events {query_conditions}
@@ -278,8 +278,8 @@ class Database:
             async with db.execute(f'''
                 SELECT 
                     role_name,
-                    SUM(CASE WHEN event_type = 'added' THEN 1 ELSE 0 END) as added_count,
-                    SUM(CASE WHEN event_type = 'removed' THEN 1 ELSE 0 END) as removed_count
+                    COALESCE(SUM(CASE WHEN event_type = 'added' THEN 1 ELSE 0 END), 0) as added_count,
+                    COALESCE(SUM(CASE WHEN event_type = 'removed' THEN 1 ELSE 0 END), 0) as removed_count
                 FROM role_events {query_conditions}
                 GROUP BY role_id, role_name
                 ORDER BY added_count DESC
