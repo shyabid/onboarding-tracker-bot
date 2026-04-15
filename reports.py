@@ -37,7 +37,7 @@ class ReportGenerator:
             ranges['daily'] = (today_start, now)
         
         if report_type in ['weekly', 'all']:
-            week_start = today_start - timedelta(days=today_start.weekday())
+            week_start = today_start - timedelta(days=7)
             ranges['weekly'] = (week_start, now)
         
         if report_type in ['monthly', 'all']:
@@ -1162,7 +1162,7 @@ class AdvancedReportView(discord.ui.View):
         self.current_view = 'overview'
         self.current_period = 'daily'
     
-    @discord.ui.button(label='📊 Overview', style=discord.ButtonStyle.primary, emoji='📊')
+    @discord.ui.button(label='📊 Overview', style=discord.ButtonStyle.primary)
     async def overview_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show overview dashboard"""
         embed, _ = await self.reporter.create_advanced_report_embed(
@@ -1171,7 +1171,7 @@ class AdvancedReportView(discord.ui.View):
         self.current_view = 'overview'
         await interaction.response.edit_message(embed=embed, view=self)
     
-    @discord.ui.button(label='📅 Daily', style=discord.ButtonStyle.secondary, emoji='📅')
+    @discord.ui.button(label='📅 Daily', style=discord.ButtonStyle.secondary)
     async def daily_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show daily detailed report"""
         if 'daily' in self.report_data['periods']:
@@ -1184,7 +1184,7 @@ class AdvancedReportView(discord.ui.View):
         else:
             await interaction.response.send_message("No daily data available.", ephemeral=True)
     
-    @discord.ui.button(label='📆 Weekly', style=discord.ButtonStyle.secondary, emoji='📆')
+    @discord.ui.button(label='📆 Weekly', style=discord.ButtonStyle.secondary)
     async def weekly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show weekly detailed report"""
         if 'weekly' in self.report_data['periods']:
@@ -1197,7 +1197,7 @@ class AdvancedReportView(discord.ui.View):
         else:
             await interaction.response.send_message("No weekly data available.", ephemeral=True)
     
-    @discord.ui.button(label='📋 Monthly', style=discord.ButtonStyle.secondary, emoji='📋')
+    @discord.ui.button(label='📋 Monthly', style=discord.ButtonStyle.secondary)
     async def monthly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show monthly detailed report"""
         if 'monthly' in self.report_data['periods']:
@@ -1210,7 +1210,7 @@ class AdvancedReportView(discord.ui.View):
         else:
             await interaction.response.send_message("No monthly data available.", ephemeral=True)
     
-    @discord.ui.button(label='👥 Users', style=discord.ButtonStyle.success, emoji='👥')
+    @discord.ui.button(label='👥 Users', style=discord.ButtonStyle.success)
     async def users_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Show user analytics"""
         period_data = self.report_data['periods'].get(self.current_period)
@@ -1264,7 +1264,7 @@ class LiveDashboardView(discord.ui.View):
         self.tracker_cog = tracker_cog
         self.guild_id = guild_id
     
-    @discord.ui.button(label='🔄 Refresh', style=discord.ButtonStyle.primary, emoji='🔄')
+    @discord.ui.button(label='🔄 Refresh', style=discord.ButtonStyle.primary)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Refresh the dashboard with latest data"""
         await interaction.response.defer()
@@ -1373,7 +1373,7 @@ class LiveDashboardView(discord.ui.View):
             )
             await interaction.followup.send(embed=error_embed, ephemeral=True)
     
-    @discord.ui.button(label='📊 Advanced Report', style=discord.ButtonStyle.success, emoji='📊')
+    @discord.ui.button(label='📊 Advanced Report', style=discord.ButtonStyle.success)
     async def advanced_report_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Switch to advanced interactive report"""
         await interaction.response.defer()

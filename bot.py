@@ -29,17 +29,21 @@ class Bot(commands.Bot):
         context: commands.Context, 
         error: commands.CommandError
     ) -> None: 
-        log_channel = await self.get_channel(1414793522447519795)
+        log_channel = self.get_channel(1414793522447519795)
+        if log_channel is None:
+            traceback.print_exception(type(error), error, error.__traceback__)
+            return
+
         embed = discord.Embed(
             title="Bot Error",
             color=discord.Color.red(),
             timestamp=discord.utils.utcnow()
         )
-        
+
         embed.add_field(name="Error Details", value=str(error)[:1024], inline=False)
-        
+
         tb_string = ''.join(traceback.format_tb(error.__traceback__))
-        
+
         if context.command:
             embed.add_field(name="Command", value=context.command.qualified_name, inline=True)
 
@@ -48,7 +52,7 @@ class Bot(commands.Bot):
             embed.add_field(name="Channel", value=f"{context.channel.mention}", inline=True)
             embed.add_field(name="Guild", value=f"{context.guild.name}\n{context.guild.id}" if context.guild else "DM", inline=True)
 
-        await log_channel.send(embed=embed, content=f"```py\n{tb_string}\n```")
+        await log_channel.send(embed=embed, content=f"```py\n{tb_string[:1800]}\n```")
         
 intents = discord.Intents.all()
 bot = Bot(intents=intents)

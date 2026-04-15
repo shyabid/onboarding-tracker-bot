@@ -6,6 +6,24 @@ from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import os
 
+
+def _fmt_dt(dt):
+    """Normalize a datetime to SQLite CURRENT_TIMESTAMP format ('YYYY-MM-DD HH:MM:SS') in UTC.
+
+    All timestamps in this DB are stored in this format so string comparisons in
+    range queries work correctly. Without this, aware datetimes serialize with a
+    '+00:00' suffix that sorts after naive CURRENT_TIMESTAMP values, silently
+    excluding matching rows from daily/weekly/monthly reports.
+    """
+    if dt is None:
+        return None
+    if isinstance(dt, str):
+        return dt
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+
 class Database:
     def __init__(self, db_path: str = "onboarding_tracker.db"):
         self.db_path = db_path
@@ -13,6 +31,9 @@ class Database:
     async def init_db(self):
         """Initialize the database with required tables"""
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute('PRAGMA journal_mode=WAL')
+            await db.execute('PRAGMA synchronous=NORMAL')
+
             # Role tracking table
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS role_events (
@@ -134,30 +155,32 @@ class Database:
         ) as cursor:
             exists = await cursor.fetchone()
         
+        now_str = _fmt_dt(datetime.now(timezone.utc))
+
         if not exists:
             # Create new user record
             await db.execute('''
                 INSERT INTO user_metadata (user_id, username, guild_id, last_activity)
                 VALUES (?, ?, ?, ?)
-            ''', (user_id, username, guild_id, datetime.now(timezone.utc)))
-        
+            ''', (user_id, username, guild_id, now_str))
+
         # Update counters and last activity
         if event_type == 'added':
             await db.execute('''
-                UPDATE user_metadata 
+                UPDATE user_metadata
                 SET total_roles_gained = total_roles_gained + 1,
                     last_activity = ?,
                     username = ?
                 WHERE user_id = ?
-            ''', (datetime.now(timezone.utc), username, user_id))
+            ''', (now_str, username, user_id))
         elif event_type == 'removed':
             await db.execute('''
-                UPDATE user_metadata 
+                UPDATE user_metadata
                 SET total_roles_lost = total_roles_lost + 1,
                     last_activity = ?,
                     username = ?
                 WHERE user_id = ?
-            ''', (datetime.now(timezone.utc), username, user_id))
+            ''', (now_str, username, user_id))
     
     async def add_tracked_role(self, role_id: int, role_name: str, guild_id: int, 
                              category: str = 'onboarding'):
@@ -219,12 +242,12 @@ class Database:
         
         if start_date:
             query += ' AND re.timestamp >= ?'
-            params.append(start_date)
-        
+            params.append(_fmt_dt(start_date))
+
         if end_date:
             query += ' AND re.timestamp <= ?'
-            params.append(end_date)
-        
+            params.append(_fmt_dt(end_date))
+
         query += ' ORDER BY re.timestamp DESC'
         
         async with aiosqlite.connect(self.db_path) as db:
@@ -234,16 +257,39 @@ class Database:
                 return [dict(zip(columns, row)) for row in rows]
     
     async def get_user_stats(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Get statistics for a specific user"""
+        """Get statistics for a specific user, including aggregates from role_events."""
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute('''
                 SELECT * FROM user_metadata WHERE user_id = ?
             ''', (user_id,)) as cursor:
                 row = await cursor.fetchone()
-                if row:
-                    columns = [desc[0] for desc in cursor.description]
-                    return dict(zip(columns, row))
-                return None
+                if not row:
+                    return None
+                columns = [desc[0] for desc in cursor.description]
+                stats = dict(zip(columns, row))
+
+            async with db.execute('''
+                SELECT
+                    COUNT(*) AS total_events,
+                    COALESCE(SUM(CASE WHEN event_type = 'added' THEN 1 ELSE 0 END), 0) AS roles_added,
+                    COALESCE(SUM(CASE WHEN event_type = 'removed' THEN 1 ELSE 0 END), 0) AS roles_removed,
+                    COUNT(DISTINCT role_id) AS unique_roles,
+                    COALESCE(SUM(CASE WHEN source_type = 'onboarding_completion' THEN 1 ELSE 0 END), 0) AS onboarding_events,
+                    MIN(timestamp) AS first_event,
+                    MAX(timestamp) AS last_event
+                FROM role_events
+                WHERE user_id = ?
+            ''', (user_id,)) as cursor:
+                agg_row = await cursor.fetchone()
+                agg_columns = [desc[0] for desc in cursor.description]
+                stats.update(dict(zip(agg_columns, agg_row)))
+
+            if not stats.get('first_role_date'):
+                stats['first_role_date'] = stats.get('first_event')
+            if not stats.get('last_activity'):
+                stats['last_activity'] = stats.get('last_event')
+
+            return stats
     
     async def get_summary_stats(self, guild_id: int, start_date: datetime = None,
                               end_date: datetime = None) -> Dict[str, Any]:
@@ -253,11 +299,11 @@ class Database:
         
         if start_date:
             query_conditions += ' AND timestamp >= ?'
-            params.append(start_date)
-        
+            params.append(_fmt_dt(start_date))
+
         if end_date:
             query_conditions += ' AND timestamp <= ?'
-            params.append(end_date)
+            params.append(_fmt_dt(end_date))
         
         async with aiosqlite.connect(self.db_path) as db:
             # Total events
@@ -299,32 +345,32 @@ class Database:
     
     async def record_member_join(self, user_id: int, username: str, guild_id: int, join_time: datetime):
         """Record when a member joins the server"""
-        timestamp = join_time.isoformat()
-        
+        timestamp = _fmt_dt(join_time)
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
-                INSERT OR REPLACE INTO member_joins 
+                INSERT OR REPLACE INTO member_joins
                 (user_id, username, guild_id, join_time)
                 VALUES (?, ?, ?, ?)
             """, (user_id, username, guild_id, timestamp))
             await db.commit()
-    
+
     async def record_member_leave(self, user_id: int, guild_id: int, leave_time: datetime):
         """Record when a member leaves the server"""
-        timestamp = leave_time.isoformat()
-        
+        timestamp = _fmt_dt(leave_time)
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
-                UPDATE member_joins 
-                SET leave_time = ? 
+                UPDATE member_joins
+                SET leave_time = ?
                 WHERE user_id = ? AND guild_id = ?
             """, (timestamp, user_id, guild_id))
             await db.commit()
-    
+
     async def mark_onboarding_complete(self, user_id: int, guild_id: int, completion_time: datetime, roles_gained: list):
         """Mark a user's onboarding as complete"""
         import json
-        timestamp = completion_time.isoformat()
+        timestamp = _fmt_dt(completion_time)
         roles_json = json.dumps(roles_gained)
         
         async with aiosqlite.connect(self.db_path) as db:
@@ -374,16 +420,16 @@ class Database:
             await db.execute('''
                 INSERT OR REPLACE INTO guild_status (guild_id, is_enabled, enabled_date)
                 VALUES (?, TRUE, ?)
-            ''', (guild_id, datetime.now(timezone.utc)))
+            ''', (guild_id, _fmt_dt(datetime.now(timezone.utc))))
             await db.commit()
-    
+
     async def disable_guild(self, guild_id: int):
         """Disable tracking for a guild"""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('''
                 INSERT OR REPLACE INTO guild_status (guild_id, is_enabled, disabled_date)
                 VALUES (?, FALSE, ?)
-            ''', (guild_id, datetime.now(timezone.utc)))
+            ''', (guild_id, _fmt_dt(datetime.now(timezone.utc))))
             await db.commit()
     
     async def is_guild_enabled(self, guild_id: int) -> bool:

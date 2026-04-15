@@ -6,6 +6,7 @@ from reports import ReportGenerator
 from datetime import datetime, timezone, timedelta
 import asyncio
 import os
+import traceback
 from typing import Optional, Set, Dict
 
 class HelpView(discord.ui.View):
@@ -235,104 +236,109 @@ class Tracker(commands.Cog):
     async def cog_load(self):
         """Initialize database when cog loads"""
         await self.db.init_db()
-        await self.load_onboarding_settings()
         print("✅ Dynamic Onboarding Tracker initialized")
-    
-    async def load_onboarding_settings(self):
-        """Load onboarding detection settings from database"""
-        settings = await self.db.get_guild_settings()
-        if settings:
-            self.onboarding_detection_window = timedelta(hours=settings.get('detection_window_hours', 24))
-            self.min_roles_for_completion = settings.get('min_roles_for_completion', 1)
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
         """Track when new members join the server"""
-        self.recent_joins[member.id] = datetime.now(timezone.utc)
-        
-        await self.db.record_member_join(
-            user_id=member.id,
-            username=str(member),
-            guild_id=member.guild.id,
-            join_time=datetime.now(timezone.utc)
-        )
+        try:
+            self.recent_joins[member.id] = datetime.now(timezone.utc)
+
+            await self.db.record_member_join(
+                user_id=member.id,
+                username=str(member),
+                guild_id=member.guild.id,
+                join_time=datetime.now(timezone.utc)
+            )
+        except Exception:
+            print(f"[tracker] on_member_join failed for {member.id} in guild {member.guild.id}:")
+            traceback.print_exc()
 
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
         """Track role changes and detect onboarding completion"""
-        if before.roles == after.roles:
-            return
+        try:
+            if before.roles == after.roles:
+                return
 
-        added_roles = set(after.roles) - set(before.roles)
-        removed_roles = set(before.roles) - set(after.roles)
+            added_roles = set(after.roles) - set(before.roles)
+            removed_roles = set(before.roles) - set(after.roles)
 
-        is_recent_joiner = after.id in self.recent_joins
-        join_time = self.recent_joins.get(after.id) if is_recent_joiner else None
+            is_recent_joiner = after.id in self.recent_joins
+            join_time = self.recent_joins.get(after.id) if is_recent_joiner else None
 
-        onboarding_completion = False
-        if is_recent_joiner and join_time:
-            time_since_join = datetime.now(timezone.utc) - join_time
-            if time_since_join <= self.onboarding_detection_window:
-                non_everyone_roles = [r for r in after.roles if r.name != "@everyone"]
-                if len(non_everyone_roles) >= self.min_roles_for_completion:
-                    onboarding_completion = True
+            onboarding_completion = False
+            time_since_join = None
+            if is_recent_joiner and join_time:
+                time_since_join = datetime.now(timezone.utc) - join_time
+                if time_since_join <= self.onboarding_detection_window:
+                    non_everyone_roles = [r for r in after.roles if r.name != "@everyone"]
+                    if len(non_everyone_roles) >= self.min_roles_for_completion:
+                        onboarding_completion = True
 
-        # Track added roles
-        for role in added_roles:
-            if role.name == "@everyone":
-                continue
-                
-            source_type = "manual_assign"
-            source_info = {}
-            
-            if onboarding_completion:
-                source_type = "onboarding_completion"
-                source_info = {
-                    "join_time": join_time.isoformat() if join_time else None,
-                    "time_to_complete": str(time_since_join) if join_time else None,
-                    "total_roles_gained": len(added_roles)
-                }
-                
-                if after.id in self.recent_joins:
-                    del self.recent_joins[after.id]
+            # Track added roles
+            for role in added_roles:
+                if role.name == "@everyone":
+                    continue
 
-            await self.db.add_role_event(
-                user_id=after.id,
-                username=str(after),
-                role_id=role.id,
-                role_name=role.name,
-                event_type='added',
-                guild_id=after.guild.id,
-                source_type=source_type,
-                source_info=source_info
-            )
+                source_type = "manual_assign"
+                source_info = {}
 
-        # Track removed roles
-        for role in removed_roles:
-            if role.name == "@everyone":
-                continue
-                
-            await self.db.add_role_event(
-                user_id=after.id,
-                username=str(after),
-                role_id=role.id,
-                role_name=role.name,
-                event_type='removed',
-                guild_id=after.guild.id,
-                source_type="role_removal"
-            )
+                if onboarding_completion:
+                    source_type = "onboarding_completion"
+                    source_info = {
+                        "join_time": join_time.isoformat() if join_time else None,
+                        "time_to_complete": str(time_since_join) if time_since_join else None,
+                        "total_roles_gained": len(added_roles)
+                    }
+
+                    if after.id in self.recent_joins:
+                        del self.recent_joins[after.id]
+
+                await self.db.add_role_event(
+                    user_id=after.id,
+                    username=str(after),
+                    role_id=role.id,
+                    role_name=role.name,
+                    event_type='added',
+                    guild_id=after.guild.id,
+                    source_type=source_type,
+                    source_info=source_info
+                )
+
+            # Track removed roles
+            for role in removed_roles:
+                if role.name == "@everyone":
+                    continue
+
+                await self.db.add_role_event(
+                    user_id=after.id,
+                    username=str(after),
+                    role_id=role.id,
+                    role_name=role.name,
+                    event_type='removed',
+                    guild_id=after.guild.id,
+                    source_type="role_removal"
+                )
+        except Exception:
+            print(f"[tracker] on_member_update failed for {after.id} in guild {after.guild.id}:")
+            traceback.print_exc()
 
     @commands.Cog.listener()
     async def on_member_remove(self, member):
         """Clean up tracking when members leave"""
-        if member.id in self.recent_joins:
-            del self.recent_joins[member.id]
-        
-        await self.db.record_member_leave(
-            user_id=member.id,
-            guild_id=member.guild.id,
-            leave_time=datetime.now(timezone.utc)
-        )
+        try:
+            if member.id in self.recent_joins:
+                del self.recent_joins[member.id]
+
+            await self.db.record_member_leave(
+                user_id=member.id,
+                guild_id=member.guild.id,
+                leave_time=datetime.now(timezone.utc)
+            )
+        except Exception:
+            print(f"[tracker] on_member_remove failed for {member.id} in guild {member.guild.id}:")
+            traceback.print_exc()
 
     # Create command groups
     tracker_group = app_commands.Group(name="tracker", description="Onboarding role tracking and analytics")
@@ -707,35 +713,51 @@ class Tracker(commands.Cog):
     async def user_stats(self, interaction: discord.Interaction, user: discord.Member):
         """Get detailed statistics for a specific user"""
         stats = await self.db.get_user_stats(user.id)
-        
+
         if not stats:
             await interaction.response.send_message(
                 f"No tracking data found for {user.mention}."
             )
             return
-        
+
         embed = discord.Embed(
             title=f"User Statistics: {user.display_name}",
             color=0x2ecc71
         )
-        
-        embed.add_field(name="Total Role Events", value=stats['total_events'], inline=True)
-        embed.add_field(name="Roles Added", value=stats['roles_added'], inline=True)
-        embed.add_field(name="Roles Removed", value=stats['roles_removed'], inline=True)
-        embed.add_field(name="Net Role Changes", value=stats['roles_added'] - stats['roles_removed'], inline=True)
-        embed.add_field(name="Unique Roles", value=stats['unique_roles'], inline=True)
-        embed.add_field(name="Onboarding Events", value=stats.get('onboarding_events', 0), inline=True)
-        
-        if stats['first_role_date']:
-            embed.add_field(name="First Role Date", 
-                           value=f"<t:{int(datetime.fromisoformat(stats['first_role_date'].replace('Z', '+00:00')).timestamp())}:F>", 
-                           inline=False)
-        
-        if stats['last_activity']:
-            embed.add_field(name="Last Activity", 
-                           value=f"<t:{int(datetime.fromisoformat(stats['last_activity'].replace('Z', '+00:00')).timestamp())}:R>", 
-                           inline=False)
-        
+
+        roles_added = stats.get('roles_added', 0) or 0
+        roles_removed = stats.get('roles_removed', 0) or 0
+
+        embed.add_field(name="Total Role Events", value=stats.get('total_events', 0) or 0, inline=True)
+        embed.add_field(name="Roles Added", value=roles_added, inline=True)
+        embed.add_field(name="Roles Removed", value=roles_removed, inline=True)
+        embed.add_field(name="Net Role Changes", value=roles_added - roles_removed, inline=True)
+        embed.add_field(name="Unique Roles", value=stats.get('unique_roles', 0) or 0, inline=True)
+        embed.add_field(name="Onboarding Events", value=stats.get('onboarding_events', 0) or 0, inline=True)
+
+        def _to_ts(value):
+            """Parse the various stored timestamp shapes into a unix timestamp."""
+            if not value:
+                return None
+            if isinstance(value, datetime):
+                dt = value
+            else:
+                try:
+                    dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+                except ValueError:
+                    return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
+
+        first_ts = _to_ts(stats.get('first_role_date'))
+        if first_ts:
+            embed.add_field(name="First Role Date", value=f"<t:{first_ts}:F>", inline=False)
+
+        last_ts = _to_ts(stats.get('last_activity'))
+        if last_ts:
+            embed.add_field(name="Last Activity", value=f"<t:{last_ts}:R>", inline=False)
+
         await interaction.response.send_message(embed=embed)
 
     @tracker_group.command(name="help", description="Comprehensive help system for all features")
